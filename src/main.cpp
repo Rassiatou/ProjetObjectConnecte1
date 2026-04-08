@@ -4,32 +4,26 @@
 #include <Adafruit_SSD1306.h>
 #include <Keypad.h>
 
+// ================= OLED =================
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-// ====== PINS ======
+// ================= LED + POT =================
 #define LED_PIN 2
 #define POT_PIN 34
 
-// OLED I2C par defaut ESP32
-// SDA = 21
-// SCL = 22
-
-// ====== PWM ======
 #define PWM_CHANNEL 0
 #define PWM_FREQ 5000
-#define PWM_RESOLUTION 8   // 0 a 255
+#define PWM_RESOLUTION 8
 
-// ====== WIFI ======
+// ================= WIFI =================
 const char* ssid = "Sims43";
-const char* password = "12345678";   // remplace ici
+const char* password = "12345678";   // remplace ici par ton vrai mot de passe
 
 WiFiServer server(80);
 
-// ====== OLED ======
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
-
-// ====== CLAVIER ======
+// ================= CLAVIER =================
 const byte ROWS = 4;
 const byte COLS = 4;
 
@@ -40,22 +34,45 @@ char keys[ROWS][COLS] = {
   {'*','0','#','D'}
 };
 
-byte colPins[COLS] = {19, 18, 32, 33};  // C1 C2 C3 C4 
-byte rowPins[ROWS] = {25, 26, 27, 14};  // R1 R2 R3 R4
+// Broches clavier validées
+byte colPins[COLS] = {13, 12, 14, 27};
+byte rowPins[ROWS] = {26, 25, 33, 32};
 
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
-// ====== VARIABLES ======
-bool wifiConnected = false;
-bool ledManuelle = false;       // true = mode manuel
-int ledManualValue = 0;         // 0 ou 255
-int oledPage = 0;               // 0 ou 1
-
-int valeurPot = 0;
+// ================= VARIABLES =================
+bool wifiOK = false;
+bool modeAuto = true;
 int luminosite = 0;
-String modeActuel = "AUTO";
+int valeurPot = 0;
+int pageOLED = 0;   // 0 = page infos, 1 = page commandes
 
-void afficherPage0() {
+// ================= WIFI =================
+void connectWiFi() {
+  WiFi.begin(ssid, password);
+  Serial.print("Connexion WiFi");
+
+  unsigned long start = millis();
+
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiOK = true;
+    Serial.println("\nConnecte !");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+    server.begin();
+  } else {
+    Serial.println("\nEchec WiFi");
+    wifiOK = false;
+  }
+}
+
+// ================= OLED =================
+void afficherPageInfos() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
@@ -63,32 +80,32 @@ void afficherPage0() {
   display.setCursor(0, 0);
   display.println("Maison connectee");
 
-  display.setCursor(0, 15);
+  display.setCursor(0, 12);
   display.print("WiFi: ");
-  display.println(wifiConnected ? "OK" : "...");
+  display.println(wifiOK ? "OK" : "NON");
 
-  display.setCursor(0, 28);
+  display.setCursor(0, 24);
   display.print("Pot: ");
   display.println(valeurPot);
 
-  display.setCursor(0, 41);
+  display.setCursor(0, 36);
   display.print("LED: ");
   display.println(luminosite);
 
-  display.setCursor(0, 54);
+  display.setCursor(0, 48);
   display.print("Mode: ");
-  display.println(modeActuel);
+  display.println(modeAuto ? "AUTO" : "MANUEL");
 
   display.display();
 }
 
-void afficherPage1() {
+void afficherPageCommandes() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
 
   display.setCursor(0, 0);
-  display.println("Commandes clavier");
+  display.println("Commandes");
 
   display.setCursor(0, 14);
   display.println("1 = LED ON");
@@ -97,22 +114,23 @@ void afficherPage1() {
   display.println("2 = LED OFF");
 
   display.setCursor(0, 38);
-  display.println("3 = Mode AUTO");
+  display.println("3 = AUTO");
 
   display.setCursor(0, 50);
-  display.println("A = Changer page");
+  display.println("A = Changer ecran");
 
   display.display();
 }
 
-void mettreAJourOLED() {
-  if (oledPage == 0) {
-    afficherPage0();
+void afficherOLED() {
+  if (pageOLED == 0) {
+    afficherPageInfos();
   } else {
-    afficherPage1();
+    afficherPageCommandes();
   }
 }
 
+// ================= CLAVIER =================
 void gererClavier() {
   char key = keypad.getKey();
 
@@ -121,102 +139,36 @@ void gererClavier() {
     Serial.println(key);
 
     if (key == '1') {
-      ledManuelle = true;
-      ledManualValue = 255;
+      modeAuto = false;
       luminosite = 255;
-      modeActuel = "MANUEL ON";
-      ledcWrite(PWM_CHANNEL, luminosite);
     }
     else if (key == '2') {
-      ledManuelle = true;
-      ledManualValue = 0;
+      modeAuto = false;
       luminosite = 0;
-      modeActuel = "MANUEL OFF";
-      ledcWrite(PWM_CHANNEL, luminosite);
     }
     else if (key == '3') {
-      ledManuelle = false;
-      modeActuel = "AUTO";
+      modeAuto = true;
     }
     else if (key == 'A') {
-      oledPage = (oledPage + 1) % 2;
+      pageOLED = (pageOLED + 1) % 2;   // alterne entre 0 et 1
     }
   }
 }
 
-void gererPotentiometreEtLED() {
+// ================= LED + POT =================
+void gererLED() {
   valeurPot = analogRead(POT_PIN);
 
-  if (!ledManuelle) {
+  if (modeAuto) {
     luminosite = map(valeurPot, 0, 4095, 0, 255);
-    ledcWrite(PWM_CHANNEL, luminosite);
-  } else {
-    luminosite = ledManualValue;
-    ledcWrite(PWM_CHANNEL, luminosite);
-  }
-}
-
-void connecterWiFi() {
-  WiFi.begin(ssid, password);
-  Serial.print("Connexion WiFi");
-
-  unsigned long startAttempt = millis();
-
-  while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 15000) {
-    delay(500);
-    Serial.print(".");
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    wifiConnected = true;
-    Serial.println();
-    Serial.println("WiFi connecte !");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
-    server.begin();
-  } else {
-    wifiConnected = false;
-    Serial.println();
-    Serial.println("Echec connexion WiFi");
-  }
+  ledcWrite(PWM_CHANNEL, luminosite);
 }
 
-void repondrePageWeb(WiFiClient client) {
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-type:text/html; charset=utf-8");
-  client.println("Connection: close");
-  client.println();
-
-  client.println("<!DOCTYPE html>");
-  client.println("<html>");
-  client.println("<head>");
-  client.println("<meta charset='utf-8'>");
-  client.println("<meta name='viewport' content='width=device-width, initial-scale=1'>");
-  client.println("<meta http-equiv='refresh' content='2'>");
-  client.println("<title>Maison connectee ESP32</title>");
-  client.println("</head>");
-  client.println("<body style='font-family:Arial; padding:20px;'>");
-
-  client.println("<h1>Maison connectee ESP32</h1>");
-  client.println("<p><b>WiFi :</b> OK</p>");
-  client.println("<p><b>Potentiometre :</b> " + String(valeurPot) + "</p>");
-  client.println("<p><b>Luminosite LED :</b> " + String(luminosite) + "</p>");
-  client.println("<p><b>Mode :</b> " + modeActuel + "</p>");
-
-  client.println("<h2>Commandes clavier</h2>");
-  client.println("<ul>");
-  client.println("<li>1 = LED ON</li>");
-  client.println("<li>2 = LED OFF</li>");
-  client.println("<li>3 = Mode AUTO</li>");
-  client.println("<li>A = Changer page OLED</li>");
-  client.println("</ul>");
-
-  client.println("</body>");
-  client.println("</html>");
-}
-
-void gererServeurWeb() {
-  if (!wifiConnected) return;
+// ================= WEB =================
+void gererWeb() {
+  if (!wifiOK) return;
 
   WiFiClient client = server.available();
   if (!client) return;
@@ -229,12 +181,39 @@ void gererServeurWeb() {
   if (client.available()) {
     client.readStringUntil('\r');
     client.flush();
-    repondrePageWeb(client);
   }
 
+  client.println("HTTP/1.1 200 OK");
+  client.println("Content-type:text/html; charset=utf-8");
+  client.println("Connection: close");
+  client.println();
+
+  client.println("<!DOCTYPE html>");
+  client.println("<html><head><meta charset='utf-8'>");
+  client.println("<meta name='viewport' content='width=device-width, initial-scale=1'>");
+  client.println("<meta http-equiv='refresh' content='2'>");
+  client.println("<title>ESP32 Maison Connectee</title></head>");
+  client.println("<body style='font-family:Arial; padding:20px;'>");
+
+  client.println("<h1>ESP32 Maison Connectee</h1>");
+  client.println("<p><b>Potentiometre :</b> " + String(valeurPot) + "</p>");
+  client.println("<p><b>Luminosite LED :</b> " + String(luminosite) + "</p>");
+  client.println("<p><b>Mode :</b> " + String(modeAuto ? "AUTO" : "MANUEL") + "</p>");
+  client.println("<p><b>WiFi :</b> " + String(wifiOK ? "OK" : "NON") + "</p>");
+
+  client.println("<h2>Commandes clavier</h2>");
+  client.println("<ul>");
+  client.println("<li>1 = LED ON</li>");
+  client.println("<li>2 = LED OFF</li>");
+  client.println("<li>3 = Mode AUTO</li>");
+  client.println("<li>A = Changer ecran OLED</li>");
+  client.println("</ul>");
+
+  client.println("</body></html>");
   client.stop();
 }
 
+// ================= SETUP =================
 void setup() {
   Serial.begin(115200);
 
@@ -245,34 +224,26 @@ void setup() {
   // OLED
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println("Erreur OLED");
-    for (;;) {}
+    while (true);
   }
 
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  display.setCursor(0, 10);
+  display.setCursor(0, 20);
   display.println("Demarrage...");
   display.display();
 
-  connecterWiFi();
-  mettreAJourOLED();
+  // WiFi
+  connectWiFi();
 }
 
+// ================= LOOP =================
 void loop() {
   gererClavier();
-  gererPotentiometreEtLED();
-  mettreAJourOLED();
-  gererServeurWeb();
-
-  Serial.print("Pot: ");
-  Serial.print(valeurPot);
-  Serial.print(" | LED: ");
-  Serial.print(luminosite);
-  Serial.print(" | Mode: ");
-  Serial.print(modeActuel);
-  Serial.print(" | WiFi: ");
-  Serial.println(wifiConnected ? "OK" : "NON");
+  gererLED();
+  afficherOLED();
+  gererWeb();
 
   delay(150);
 }
